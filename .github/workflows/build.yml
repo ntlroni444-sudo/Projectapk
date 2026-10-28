@@ -1,1 +1,104 @@
 
+name: Build Flutter APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_url:
+        description: 'URL ZIP Project atau URL Web (Vercel/GitHub)'
+        required: true
+      tag:
+        description: 'Nama Tag Build (otomatis dari bot)'
+        required: true
+      build_type:
+        description: 'Pilih build_type (debug / release)'
+        required: true
+        default: 'release'
+      is_web:
+        description: 'Web to APK? (true / false)'
+        required: true
+        default: 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ==========================================
+      # LOGIKA JIKA YANG DI-BUILD ADALAH FLUTTER ZIP
+      # ==========================================
+      - name: Download ZIP Project
+        if: github.event.inputs.is_web == 'false'
+        run: |
+          wget -O project.zip "${{ github.event.inputs.release_url }}"
+          unzip -q project.zip -d ./project
+          
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get Dependencies & Build APK (Flutter)
+        if: github.event.inputs.is_web == 'false'
+        working-directory: ./project
+        run: |
+          flutter pub get
+          flutter build apk --${{ github.event.inputs.build_type }}
+          
+          # Rename APK biar rapi
+          mv build/app/outputs/flutter-apk/app-${{ github.event.inputs.build_type }}.apk ../App-${{ github.event.inputs.build_type }}.apk || true
+
+      # ==========================================
+      # LOGIKA JIKA YANG DI-BUILD ADALAH WEB (WEB2APK)
+      # ==========================================
+      - name: Setup Node.js (Web2APK)
+        if: github.event.inputs.is_web == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build APK from Web (WebView)
+        if: github.event.inputs.is_web == 'true'
+        run: |
+          # Install Cordova (buat bungkus web jadi APK)
+          npm install -g cordova
+          
+          # Bikin project Cordova
+          cordova create webapp com.xevo.webapp "Web2Apk"
+          cd webapp
+          
+          # Tambah platform android
+          cordova platform add android
+          
+          # Ganti config biar ngarah ke URL website
+          npx cordova plugin add cordova-plugin-inappbrowser
+          
+          # Timpa index.html biar redirect ke web target
+          echo "<html><head><meta http-equiv='refresh' content='0; url=${{ github.event.inputs.release_url }}'></head><body></body></html>" > www/index.html
+          
+          # Build APK
+          cordova build android --${{ github.event.inputs.build_type }}
+          
+          mv platforms/android/app/build/outputs/apk/${{ github.event.inputs.build_type }}/app-${{ github.event.inputs.build_type }}.apk ../App-Web.apk || true
+
+      # ==========================================
+      # UPLOAD HASIL KE ARTIFACT (BIAR BISA DI-DOWNLOAD BOT)
+      # ==========================================
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Output-${{ github.event.inputs.tag }}
+          path: |
+            App-${{ github.event.inputs.build_type }}.apk
+            App-Web.apk
+          retention-days: 1
